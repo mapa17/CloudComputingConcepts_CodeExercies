@@ -25,6 +25,8 @@ MP1Node::MP1Node(Member *member, Params *params, EmulNet *emul, Log *log, Addres
 	this->log = log;
 	this->par = params;
 	this->memberNode->addr = *address;
+
+    this->strBufferCnter = 0;
 }
 
 /**
@@ -112,6 +114,45 @@ int MP1Node::initThisNode(Address *joinaddr) {
     return 0;
 }
 
+void MP1Node::sendMessage(MsgTypes msgType, Address *addr, char *data, long size){
+    printf("Send: [%s]->[%s], Type %d, Size %ld\n",
+        strAddress(memberNode->addr.addr),
+        strAddress(addr->addr),
+        msgType,
+        size);
+
+    MessageHdr *msgh = (MessageHdr*) malloc(sizeof(MessageHdr) + size);
+    msgh->msgType = msgType;
+    memcpy(&(msgh->addr), addr->addr, sizeof(msgh->addr));
+    msgh->heartbeat = memberNode->heartbeat;
+    msgh->payloadSize = size;
+
+    if(size > 0){
+        memcpy((char *)(msgh+1), &data, size);
+    }
+    emulNet->ENsend(&memberNode->addr, addr, (char *)msgh, sizeof(MessageHdr) + size);
+    free(msgh);
+}
+
+Message* MP1Node::recvMessage(char *data, long size)
+{
+    Message *msg = (Message*)malloc(sizeof(Message));
+    MessageHdr *msgh = (MessageHdr*)data; 
+
+    msg->header.msgType = msgh->msgType;
+    memcpy(&(msg->header.addr), msgh->addr, sizeof(msg->header.addr));
+    msg->header.heartbeat = msgh->heartbeat;
+    msg->header.payloadSize = msgh->payloadSize;
+
+    if(msg->header.payloadSize == 0){
+        msg->payload = NULL;
+    } else {
+        msg->payload = (char*) malloc(msg->header.payloadSize);
+        memcpy(&(msg->payload), msgh+1, msg->header.payloadSize);
+    }
+    return msg;
+}
+
 /**
  * FUNCTION NAME: introduceSelfToGroup
  *
@@ -131,6 +172,10 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
         memberNode->inGroup = true;
     }
     else {
+        sendMessage(JOINREQ, joinaddr, NULL, 0);
+        //sendMessage(MOREMSGTYPES, joinaddr, NULL, 0);
+
+        /*
         size_t msgsize = sizeof(MessageHdr) + sizeof(joinaddr->addr) + sizeof(long) + 1;
         msg = (MessageHdr *) malloc(msgsize * sizeof(char));
 
@@ -148,6 +193,7 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
         emulNet->ENsend(&memberNode->addr, joinaddr, (char *)msg, msgsize);
 
         free(msg);
+        */
     }
 
     return 1;
@@ -205,6 +251,8 @@ void MP1Node::checkMessages() {
     	size = memberNode->mp1q.front().size;
     	memberNode->mp1q.pop();
     	recvCallBack((void *)memberNode, (char *)ptr, size);
+        // Have to call free?
+        //free(ptr);
     }
     return;
 }
@@ -218,6 +266,19 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
 	/*
 	 * Your code goes here
 	 */
+    printf("In recvCallback: msg size %d\n", size);
+    if(size == 0){
+        return false;
+    }
+    Member* member = (Member*) env;
+    Message* msg = recvMessage(data, size);
+    printf("Recv: [%s]<-[%s], Type %d, Size %ld\n", 
+        strAddress(member->addr.addr), 
+        strAddress(msg->header.addr), 
+        msg->header.msgType, 
+        msg->header.payloadSize);
+    free(msg);
+    return true;
 }
 
 /**
@@ -233,6 +294,7 @@ void MP1Node::nodeLoopOps() {
 	 * Your code goes here
 	 */
 
+    memberNode->heartbeat += 1;
     return;
 }
 
@@ -269,6 +331,19 @@ void MP1Node::initMemberListTable(Member *memberNode) {
 	memberNode->memberList.clear();
 }
 
+
+char* MP1Node::getStrBuffer(){
+    strBufferCnter = (strBufferCnter+1)%strBufferSize;
+    return strBuffer[strBufferCnter];
+}
+
+char* MP1Node::strAddress(char* addr)
+{
+    char *buffer = getStrBuffer();
+    sprintf(buffer, "%d.%d.%d.%d:%d",  addr[0],addr[1], addr[2], addr[3], *(short*)&addr[4]);
+    return buffer;
+}
+
 /**
  * FUNCTION NAME: printAddress
  *
@@ -276,6 +351,5 @@ void MP1Node::initMemberListTable(Member *memberNode) {
  */
 void MP1Node::printAddress(Address *addr)
 {
-    printf("%d.%d.%d.%d:%d \n",  addr->addr[0],addr->addr[1],addr->addr[2],
-                                                       addr->addr[3], *(short*)&addr->addr[4]) ;    
+    printf("%s\n", strAddress(addr->addr));
 }
