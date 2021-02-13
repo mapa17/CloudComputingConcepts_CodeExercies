@@ -9,6 +9,7 @@
 #define _MP1NODE_H_
 
 #include "stdincludes.h"
+#include <tuple>
 #include "Log.h"
 #include "Params.h"
 #include "Member.h"
@@ -29,9 +30,8 @@
  * Message Types
  */
 enum MsgTypes{
-    JOINREQ,
+    JOINREQ=2,
     JOINREP,
-	MOREMSGTYPES,
     DUMMYLASTMSGTYPE
 };
 
@@ -42,15 +42,7 @@ enum MsgTypes{
  */
 typedef struct MessageHdr {
 	enum MsgTypes msgType;
-	char addr[6];
-	long heartbeat;
-	long payloadSize;
 }MessageHdr;
-
-typedef struct Message{
-	MessageHdr header;
-	char* payload;
-}Message;
 
 /**
  * CLASS NAME: MP1Node
@@ -65,11 +57,7 @@ private:
 	Member *memberNode;
 	char NULLADDR[6];
 
-	static const int strBufferSize = 10;
-	char strBuffer[strBufferSize][128];
-	char* getStrBuffer();
 public:
-	int strBufferCnter;
 	MP1Node(Member *, Params *, EmulNet *, Log *, Address *);
 	Member * getMemberNode() {
 		return memberNode;
@@ -88,11 +76,10 @@ public:
 	Address getJoinAddress();
 	void initMemberListTable(Member *memberNode);
 	void printAddress(Address *addr);
+	string getAddressString(char* addr);
+	std::vector<std::tuple<int, long>> getActiveMembers();
+	size_t getActiveMembersBuffer(char **buffer);
 	virtual ~MP1Node();
-
-	void sendMessage(MsgTypes header, Address *addr, char *data, long size);
-	Message* recvMessage(char *data, long size);
-	char* strAddress(char *addr);
 };
 
 #endif /* _MP1NODE_H_ */

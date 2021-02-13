@@ -6,6 +6,8 @@
  **********************************/
 
 #include "MP1Node.h"
+#include "Member.h"
+#include <tuple>
 
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
@@ -25,8 +27,6 @@ MP1Node::MP1Node(Member *member, Params *params, EmulNet *emul, Log *log, Addres
 	this->log = log;
 	this->par = params;
 	this->memberNode->addr = *address;
-
-    this->strBufferCnter = 0;
 }
 
 /**
@@ -106,51 +106,12 @@ int MP1Node::initThisNode(Address *joinaddr) {
 	memberNode->inGroup = false;
     // node is up!
 	memberNode->nnb = 0;
-	memberNode->heartbeat = 0;
+	memberNode->heartbeat = 42;
 	memberNode->pingCounter = TFAIL;
 	memberNode->timeOutCounter = -1;
     initMemberListTable(memberNode);
 
     return 0;
-}
-
-void MP1Node::sendMessage(MsgTypes msgType, Address *addr, char *data, long size){
-    printf("Send: [%s]->[%s], Type %d, Size %ld\n",
-        strAddress(memberNode->addr.addr),
-        strAddress(addr->addr),
-        msgType,
-        size);
-
-    MessageHdr *msgh = (MessageHdr*) malloc(sizeof(MessageHdr) + size);
-    msgh->msgType = msgType;
-    memcpy(&(msgh->addr), addr->addr, sizeof(msgh->addr));
-    msgh->heartbeat = memberNode->heartbeat;
-    msgh->payloadSize = size;
-
-    if(size > 0){
-        memcpy((char *)(msgh+1), &data, size);
-    }
-    emulNet->ENsend(&memberNode->addr, addr, (char *)msgh, sizeof(MessageHdr) + size);
-    free(msgh);
-}
-
-Message* MP1Node::recvMessage(char *data, long size)
-{
-    Message *msg = (Message*)malloc(sizeof(Message));
-    MessageHdr *msgh = (MessageHdr*)data; 
-
-    msg->header.msgType = msgh->msgType;
-    memcpy(&(msg->header.addr), msgh->addr, sizeof(msg->header.addr));
-    msg->header.heartbeat = msgh->heartbeat;
-    msg->header.payloadSize = msgh->payloadSize;
-
-    if(msg->header.payloadSize == 0){
-        msg->payload = NULL;
-    } else {
-        msg->payload = (char*) malloc(msg->header.payloadSize);
-        memcpy(&(msg->payload), msgh+1, msg->header.payloadSize);
-    }
-    return msg;
 }
 
 /**
@@ -172,10 +133,7 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
         memberNode->inGroup = true;
     }
     else {
-        sendMessage(JOINREQ, joinaddr, NULL, 0);
-        //sendMessage(MOREMSGTYPES, joinaddr, NULL, 0);
-
-        /*
+        // Node that wants to join the group, send JOINREQ message to request joining
         size_t msgsize = sizeof(MessageHdr) + sizeof(joinaddr->addr) + sizeof(long) + 1;
         msg = (MessageHdr *) malloc(msgsize * sizeof(char));
 
@@ -193,7 +151,6 @@ int MP1Node::introduceSelfToGroup(Address *joinaddr) {
         emulNet->ENsend(&memberNode->addr, joinaddr, (char *)msg, msgsize);
 
         free(msg);
-        */
     }
 
     return 1;
@@ -251,8 +208,6 @@ void MP1Node::checkMessages() {
     	size = memberNode->mp1q.front().size;
     	memberNode->mp1q.pop();
     	recvCallBack((void *)memberNode, (char *)ptr, size);
-        // Have to call free?
-        //free(ptr);
     }
     return;
 }
@@ -266,19 +221,43 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
 	/*
 	 * Your code goes here
 	 */
-    printf("In recvCallback: msg size %d\n", size);
-    if(size == 0){
-        return false;
+    Member* me = (Member*) env;
+    MessageHdr* msg = (MessageHdr*) data;
+    char* send_addr = (char*) &data[sizeof(MessageHdr)];
+    long* heartbeat = (long*) &data[sizeof(MessageHdr)+1+6];
+
+    printf("Msg [%d] [%s]<-[%s], heartbeat [%i]\n", msg->msgType, me->addr.getAddress().c_str(), this->getAddressString(send_addr).c_str(), *heartbeat);
+
+    switch(msg->msgType){
+        case JOINREQ:
+            MemberListEntry member = MemberListEntry(int(send_addr[0]), int(send_addr[4]), *heartbeat, me->heartbeat);
+            me->memberList.push_back(member);
+            printf("Adding new node [%d] to group\n", member.getid());
+
+            // Get all active nodes in form of a buffer ready for sending
+            char **active_nodes;
+            size_t buffer_size = this->getActiveMembersBuffer(active_nodes);
+
+            // Build a message containing all active nodes
+            size_t msgsize = sizeof(MessageHdr) + 6 + sizeof(long) + 1 + buffer_size;
+            msg = (MessageHdr *) malloc(msgsize * sizeof(char));
+
+            // create JOINREP message: format of data is {struct Address myaddr}
+            msg->msgType = JOINREP;
+            memcpy((char *)(msg+1), &memberNode->addr.addr, 6);
+            memcpy((char *)(msg+1) + 1 + 6, &memberNode->heartbeat, sizeof(long));
+            // attach active node buffer
+            memcpy((char *)(msg+1) + 1 + 6 + sizeof(long), *active_nodes, buffer_size);
+
+            Address recv = Address();
+            recv.init();
+            recv.addr[0] = send_addr[0];
+            recv.addr[4] = send_addr[4];
+            emulNet->ENsend(&memberNode->addr, &recv, (char *)msg, msgsize);
+
+            free(*active_nodes);
+            break;
     }
-    Member* member = (Member*) env;
-    Message* msg = recvMessage(data, size);
-    printf("Recv: [%s]<-[%s], Type %d, Size %ld\n", 
-        strAddress(member->addr.addr), 
-        strAddress(msg->header.addr), 
-        msg->header.msgType, 
-        msg->header.payloadSize);
-    free(msg);
-    return true;
 }
 
 /**
@@ -289,13 +268,55 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
  * 				Propagate your membership list
  */
 void MP1Node::nodeLoopOps() {
+    this->memberNode->heartbeat++;
 
-	/*
-	 * Your code goes here
-	 */
+    long now = this->memberNode->heartbeat;
+    long elapsed_time;
+    // Using a for loop with iterator
+    for(std::vector<MemberListEntry>::iterator it = std::begin(this->memberNode->memberList); it != std::end(this->memberNode->memberList);) {
+        elapsed_time = now - it->gettimestamp();
 
-    memberNode->heartbeat += 1;
+       if(elapsed_time >= TREMOVE){
+            printf("T:%d Time to get rid of node %d\n", now, it->getid());
+            it = this->memberNode->memberList.erase(it);
+        }
+        else{
+            it++;
+        }
+    }
     return;
+}
+
+size_t MP1Node::getActiveMembersBuffer(char** buffer){
+    std::vector<std::tuple<int, long>> active_nodes = this->getActiveMembers();
+    size_t size = active_nodes.size();
+    size_t element_size = sizeof(int) + sizeof(long);
+
+    //TODO: Check how to assign buffer passed as argument
+    *buffer = (char *) malloc(element_size * size);
+
+    for(int i=0; i < size; i++) {
+        memcpy(&((*buffer)[element_size*i + 0]), &std::get<0>(active_nodes[i]), sizeof(int));
+        memcpy(&((*buffer)[element_size*i + sizeof(int)]), &std::get<1>(active_nodes[i]), sizeof(long));
+    }
+    return element_size * size;
+}
+
+std::vector<std::tuple<int, long>> MP1Node::getActiveMembers()
+{
+    std::vector<std::tuple<int, long>> active_nodes;
+    long now = this->memberNode->heartbeat;
+    long elapsed_time;
+
+    for(std::vector<MemberListEntry>::iterator it = std::begin(this->memberNode->memberList); it != std::end(this->memberNode->memberList);it++) {
+        elapsed_time = now - it->gettimestamp();
+
+       if(elapsed_time < TFAIL){
+            printf("Active node %d\n", it->getid());
+            active_nodes.push_back(std::make_tuple(it->getid(), it->getheartbeat()));
+        }
+    }
+    return active_nodes;
 }
 
 /**
@@ -331,19 +352,6 @@ void MP1Node::initMemberListTable(Member *memberNode) {
 	memberNode->memberList.clear();
 }
 
-
-char* MP1Node::getStrBuffer(){
-    strBufferCnter = (strBufferCnter+1)%strBufferSize;
-    return strBuffer[strBufferCnter];
-}
-
-char* MP1Node::strAddress(char* addr)
-{
-    char *buffer = getStrBuffer();
-    sprintf(buffer, "%d.%d.%d.%d:%d",  addr[0],addr[1], addr[2], addr[3], *(short*)&addr[4]);
-    return buffer;
-}
-
 /**
  * FUNCTION NAME: printAddress
  *
@@ -351,5 +359,14 @@ char* MP1Node::strAddress(char* addr)
  */
 void MP1Node::printAddress(Address *addr)
 {
-    printf("%s\n", strAddress(addr->addr));
+    printf("%d.%d.%d.%d:%d \n",  addr->addr[0],addr->addr[1],addr->addr[2],
+                                                       addr->addr[3], *(short*)&addr->addr[4]) ;    
+}
+
+string MP1Node::getAddressString(char* addr){
+    	int id = 0;
+		short port;
+		memcpy(&id, &addr[0], sizeof(int));
+		memcpy(&port, &addr[4], sizeof(short));
+		return to_string(id) + ":" + to_string(port);
 }
