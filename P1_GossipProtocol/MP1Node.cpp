@@ -226,17 +226,19 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
     char* send_addr = (char*) &data[sizeof(MessageHdr)];
     long* heartbeat = (long*) &data[sizeof(MessageHdr)+1+6];
 
-    printf("Msg [%d] [%s]<-[%s], heartbeat [%i]\n", msg->msgType, me->addr.getAddress().c_str(), this->getAddressString(send_addr).c_str(), *heartbeat);
+    printf("Msg [%d] [%s]<-[%s], heartbeat [%ld]\n", msg->msgType, me->addr.getAddress().c_str(), this->getAddressString(send_addr).c_str(), *heartbeat);
 
     switch(msg->msgType){
-        case JOINREQ:
+        case JOINREQ:{
+            // Add a new node to the MemberList and send it the current member list
+
             MemberListEntry member = MemberListEntry(int(send_addr[0]), int(send_addr[4]), *heartbeat, me->heartbeat);
             me->memberList.push_back(member);
             printf("Adding new node [%d] to group\n", member.getid());
 
             // Get all active nodes in form of a buffer ready for sending
-            char **active_nodes;
-            size_t buffer_size = this->getActiveMembersBuffer(active_nodes);
+            char *active_nodes;
+            size_t buffer_size = this->getActiveMembersBuffer(&active_nodes);
 
             // Build a message containing all active nodes
             size_t msgsize = sizeof(MessageHdr) + 6 + sizeof(long) + 1 + buffer_size;
@@ -247,7 +249,7 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
             memcpy((char *)(msg+1), &memberNode->addr.addr, 6);
             memcpy((char *)(msg+1) + 1 + 6, &memberNode->heartbeat, sizeof(long));
             // attach active node buffer
-            memcpy((char *)(msg+1) + 1 + 6 + sizeof(long), *active_nodes, buffer_size);
+            memcpy((char *)(msg+1) + 1 + 6 + sizeof(long), active_nodes, buffer_size);
 
             Address recv = Address();
             recv.init();
@@ -255,8 +257,22 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
             recv.addr[4] = send_addr[4];
             emulNet->ENsend(&memberNode->addr, &recv, (char *)msg, msgsize);
 
-            free(*active_nodes);
+            free(active_nodes);
             break;
+        }
+        case JOINREP:{
+            printf("Received join group response!\n");
+
+            size_t offset = sizeof(MessageHdr)+1+6+sizeof(long);
+            int* nElements = (int*) &data[offset];
+            char* elementsBuffer = (char*) &data[offset+sizeof(int)];
+            updateActiveMembers(*nElements, elementsBuffer);
+            break;
+        }
+        default:{
+            printf("Unknown message type received!\n");
+            break;
+        }
     }
 }
 
@@ -277,7 +293,7 @@ void MP1Node::nodeLoopOps() {
         elapsed_time = now - it->gettimestamp();
 
        if(elapsed_time >= TREMOVE){
-            printf("T:%d Time to get rid of node %d\n", now, it->getid());
+            printf("T:%ld Time to get rid of node %d\n", now, it->getid());
             it = this->memberNode->memberList.erase(it);
         }
         else{
@@ -287,19 +303,57 @@ void MP1Node::nodeLoopOps() {
     return;
 }
 
+void MP1Node::updateActiveMembers(int nEntries, char *buffer){
+    
+    long now = this->memberNode->heartbeat;
+    size_t element_size = sizeof(int) + sizeof(long);
+    int* nodeid;
+    long* heartbeat;
+    for(int i=0; i < nEntries; i++){
+        nodeid = (int*) &buffer[i*element_size];
+        heartbeat = (long*) &buffer[i*element_size + sizeof(int)];
+
+        printf("[%d] Process Memberlist update entry for nodeid %d, heartbeat %ld\n", memberNode->addr.addr[0], *nodeid, *heartbeat);
+        // If the node is present in the member list, and the heartbeat of the
+        // received entry is higher, update the MemberListEntry.
+        // If the nodeid is not in the MemberList, we found a new node, add it to the list
+        for(std::vector<MemberListEntry>::iterator it = std::begin(this->memberNode->memberList); it != std::end(this->memberNode->memberList);it++) {
+            if(*nodeid == it->getid()){
+                if(*heartbeat > it->getheartbeat()){
+                    it->setheartbeat(*heartbeat);
+                    it->settimestamp(now);
+                    printf("[%d] Update entry for node [%d]\n", memberNode->addr.addr[0], *nodeid);
+                }
+                goto nextEntry;
+            }
+        }
+        {
+            // Add new node
+            printf("[%d] Adding new node [%d] to Members list during update\n", memberNode->addr.addr[0], *nodeid);
+            MemberListEntry member = MemberListEntry(*nodeid, 0, *heartbeat, now);
+            memberNode->memberList.push_back(member);
+        }
+
+        nextEntry: // Jump to this if node was already present in MemberList
+        continue;
+    }
+}
+
+
 size_t MP1Node::getActiveMembersBuffer(char** buffer){
     std::vector<std::tuple<int, long>> active_nodes = this->getActiveMembers();
-    size_t size = active_nodes.size();
+    int size = active_nodes.size();
     size_t element_size = sizeof(int) + sizeof(long);
 
     //TODO: Check how to assign buffer passed as argument
-    *buffer = (char *) malloc(element_size * size);
+    *buffer = (char *) malloc(element_size * size + sizeof(int));
 
+    memcpy(&((*buffer)[0]), &size, sizeof(int));
     for(int i=0; i < size; i++) {
-        memcpy(&((*buffer)[element_size*i + 0]), &std::get<0>(active_nodes[i]), sizeof(int));
-        memcpy(&((*buffer)[element_size*i + sizeof(int)]), &std::get<1>(active_nodes[i]), sizeof(long));
+        memcpy(&((*buffer)[element_size*i + sizeof(int)]), &std::get<0>(active_nodes[i]), sizeof(int));
+        memcpy(&((*buffer)[element_size*i + sizeof(int) + sizeof(int)]), &std::get<1>(active_nodes[i]), sizeof(long));
     }
-    return element_size * size;
+    return element_size * size + sizeof(int);
 }
 
 std::vector<std::tuple<int, long>> MP1Node::getActiveMembers()

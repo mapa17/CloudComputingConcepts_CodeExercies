@@ -78,6 +78,7 @@ public:
 	void printAddress(Address *addr);
 	string getAddressString(char* addr);
 	std::vector<std::tuple<int, long>> getActiveMembers();
+	void updateActiveMembers(int nEntries, char *buffer);
 	size_t getActiveMembersBuffer(char **buffer);
 	virtual ~MP1Node();
 };
