@@ -21,6 +21,7 @@
  */
 #define TREMOVE 20
 #define TFAIL 5
+#define PINGPERIOD 3
 
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
@@ -78,8 +79,10 @@ public:
 	void printAddress(Address *addr);
 	string getAddressString(char* addr);
 	std::vector<std::tuple<int, long>> getActiveMembers();
+	void updateMember(int nodeid, long heartbeat);
 	void updateActiveMembers(int nEntries, char *buffer);
 	size_t getActiveMembersBuffer(char **buffer);
+	void _sendJOINREP(char recvNode);
 	virtual ~MP1Node();
 };
 
