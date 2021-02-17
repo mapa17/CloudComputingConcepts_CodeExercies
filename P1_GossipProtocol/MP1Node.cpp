@@ -106,8 +106,8 @@ int MP1Node::initThisNode(Address *joinaddr) {
 	memberNode->inGroup = false;
     // node is up!
 	memberNode->nnb = 0;
-	memberNode->heartbeat = 42;
-	memberNode->pingCounter = TFAIL;
+	memberNode->heartbeat = 0;
+	memberNode->pingCounter = PINGPERIOD;
 	memberNode->timeOutCounter = -1;
     initMemberListTable(memberNode);
 
@@ -227,21 +227,23 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
     char* send_addr = (char*) &data[sizeof(MessageHdr)];
     long* heartbeat = (long*) &data[sizeof(MessageHdr)+1+6];
 
-    printf("Msg [%d] [%s]<-[%s], heartbeat [%ld]\n", msg->msgType, me->addr.getAddress().c_str(), this->getAddressString(send_addr).c_str(), *heartbeat);
+    printf("{%d:%ld} From %d, MsgType [%d], heartbeat [%ld]\n", memberNode->addr.addr[0], memberNode->heartbeat, send_addr[0], msg->msgType, *heartbeat);
 
     switch(msg->msgType){
         case JOINREQ:{
             // Add a new node to the MemberList and send it the current member list
 
-            MemberListEntry member = MemberListEntry(int(send_addr[0]), int(send_addr[4]), *heartbeat, me->heartbeat);
-            me->memberList.push_back(member);
-            printf("Adding new node [%d] to group\n", member.getid());
+            if(addMember(send_addr[0], *heartbeat)){
+                printf("{%d:%ld} Adding new node [%d] to group\n", memberNode->addr.addr[0], memberNode->heartbeat, send_addr[0]);
+                _sendJOINREP(send_addr[0]);
+            }
+            //MemberListEntry member = MemberListEntry(int(send_addr[0]), int(send_addr[4]), *heartbeat, me->heartbeat);
+            //me->memberList.push_back(member);
 
-            _sendJOINREP(send_addr[0]);
             break;
         }
         case JOINREP:{
-            printf("{%d} Received MemberList from [%d]\n", memberNode->addr.addr[0], send_addr[0]);
+            printf("{%d:%ld} Received MemberList from [%d]\n", memberNode->addr.addr[0], memberNode->heartbeat, send_addr[0]);
 
             memberNode->inGroup = true;
             size_t offset = sizeof(MessageHdr)+1+6+sizeof(long);
@@ -249,7 +251,6 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
             char* elementsBuffer = (char*) &data[offset+sizeof(int)];
             updateActiveMembers(*nElements, elementsBuffer);
 
-            // TODO: Mark the sender noder of this message as active!
             updateMember((int) send_addr[0], *heartbeat);
             break;
         }
@@ -310,7 +311,7 @@ void MP1Node::nodeLoopOps() {
             nodeAddr.addr[4] = it->getport();
             log->logNodeRemove(&memberNode->addr, &nodeAddr);
 
-            printf("{%d} T:%ld Time to get rid of node %d\n", memberNode->addr.addr[0], now, it->getid());
+            printf("{%d:%ld} Drop node %d\n", memberNode->addr.addr[0], memberNode->heartbeat, it->getid());
             it = this->memberNode->memberList.erase(it);
             memberNode->nnb--;
         }
@@ -323,25 +324,20 @@ void MP1Node::nodeLoopOps() {
     if(memberNode->pingCounter <= 0 && memberNode->nnb > 0)
     {
         memberNode->pingCounter = PINGPERIOD;
-        Address joinaddr;
-        joinaddr = getJoinAddress();
-        if ( 0 != memcmp((char *)&(memberNode->addr.addr), (char *)&(joinaddr.addr), sizeof(memberNode->addr.addr)))
-        {
-            // Send out MemberList to other peers if its time
-            // Randomly select two Members, and send them my memberlist
-            int randomNeighbour = 0;
-            char neighbourAddr = 0;
+        // Send out MemberList to other peers if its time
+        // Randomly select two Members, and send them my memberlist
+        int randomNeighbour = 0;
+        char neighbourAddr = 0;
 
-            randomNeighbour = std::rand() % memberNode->nnb;
-            neighbourAddr = memberNode->memberList[randomNeighbour].id;
-            printf("{%d} Sending Membership list to node [%d]\n", memberNode->addr.addr[0], neighbourAddr);
-            _sendJOINREP(neighbourAddr);
+        randomNeighbour = std::rand() % memberNode->nnb;
+        neighbourAddr = memberNode->memberList[randomNeighbour].id;
+        printf("{%d:%ld} Sending Membership list to node [%d]\n", memberNode->addr.addr[0], memberNode->heartbeat, neighbourAddr);
+        _sendJOINREP(neighbourAddr);
 
-            randomNeighbour = std::rand() % memberNode->nnb;
-            neighbourAddr = memberNode->memberList[randomNeighbour].id;
-            printf("{%d} Sending Membership list to node [%d]\n", memberNode->addr.addr[0], neighbourAddr);
-            _sendJOINREP(neighbourAddr);
-        }
+        randomNeighbour = std::rand() % memberNode->nnb;
+        neighbourAddr = memberNode->memberList[randomNeighbour].id;
+        printf("{%d:%ld} Sending Membership list to node [%d]\n", memberNode->addr.addr[0], memberNode->heartbeat, neighbourAddr);
+        _sendJOINREP(neighbourAddr);
     }
 
     return;
@@ -349,36 +345,49 @@ void MP1Node::nodeLoopOps() {
 
 void MP1Node::updateMember(int nodeid, long heartbeat)
 {
+    /*
+    if(nodeid == getJoinAddress().addr[0]){
+        // Dont update the joinAddressNode
+        return;
+    }
+    */
+
     long now = this->memberNode->heartbeat;
     for(std::vector<MemberListEntry>::iterator it = std::begin(this->memberNode->memberList); it != std::end(this->memberNode->memberList);it++)
     {
         if(nodeid == it->getid())
         {
-            if(heartbeat > it->getheartbeat()){
+            if(heartbeat >= it->getheartbeat()){
                 it->setheartbeat(heartbeat);
                 it->settimestamp(now);
                 // TODO: test if this works ...
-                printf("{%d} Mark active node [%d]\n", memberNode->addr.addr[0], nodeid);
+                printf("{%d:%ld} Mark active node [%d]\n", memberNode->addr.addr[0], memberNode->heartbeat, nodeid);
             } else {
-                printf("Strange! Received an outdated update!\n");
+                printf("{%d:%ld} Strange! Received old heartbeat %d<%d from node %d!\n", memberNode->addr.addr[0], memberNode->heartbeat, heartbeat, it->getheartbeat(), nodeid);
             }
-            break;
+            return;
         }
     }
 
+    // If me made it here, than this is a new node 
+    printf("{%d:%ld} Adding node [%d]\n", memberNode->addr.addr[0], memberNode->heartbeat, nodeid);
+    addMember(nodeid, heartbeat);
 }
 
 void MP1Node::updateActiveMembers(int nEntries, char *buffer){
     
+    printf("{%d:%ld} Update Memberlist: [", memberNode->addr.addr[0], memberNode->heartbeat);
     long now = this->memberNode->heartbeat;
     size_t element_size = sizeof(int) + sizeof(long);
+    std::vector<char> new_nodes;
+    std::vector<long> new_heartbeats;
     int* nodeid;
     long* heartbeat;
     for(int i=0; i < nEntries; i++){
         nodeid = (int*) &buffer[i*element_size];
         heartbeat = (long*) &buffer[i*element_size + sizeof(int)];
 
-        printf("{%d} Process Memberlist update entry for nodeid %d, heartbeat %ld\n", memberNode->addr.addr[0], *nodeid, *heartbeat);
+        //printf("{%d} Process Memberlist update entry for nodeid %d, heartbeat %ld\n", memberNode->addr.addr[0], *nodeid, *heartbeat);
         // If the node is present in the member list, and the heartbeat of the
         // received entry is higher, update the MemberListEntry.
         // If the nodeid is not in the MemberList, we found a new node, add it to the list
@@ -387,31 +396,51 @@ void MP1Node::updateActiveMembers(int nEntries, char *buffer){
                 if(*heartbeat > it->getheartbeat()){
                     it->setheartbeat(*heartbeat);
                     it->settimestamp(now);
-                    printf("[%d] Update entry for node [%d]\n", memberNode->addr.addr[0], *nodeid);
+                    //printf("{%d} Update entry for node [%d]\n", memberNode->addr.addr[0], *nodeid);
+                    printf(" U:%d " , *nodeid);
                 }
-                goto nextEntry;
-            }
-        }
-        {
-            if(*nodeid != memberNode->addr.addr[0])
-            {
-                // Add new node
-                printf("{%d} Adding new node [%d] to Members list during update\n", memberNode->addr.addr[0], *nodeid);
-                memberNode->nnb++;
-                MemberListEntry new_member = MemberListEntry(*nodeid, 0, *heartbeat, now);
-                memberNode->memberList.push_back(new_member);
-
-                // Log this for grading system
-                Address newMemberAddr = Address();
-                newMemberAddr.init();
-                newMemberAddr.addr[0] = *nodeid;
-                log->logNodeAdd(&memberNode->addr, &newMemberAddr);
+                goto next_entry;
             }
         }
 
-        nextEntry: // Jump to this if node was already present in MemberList
+        // This node is not in the MemberList yet. Add it later
+        new_nodes.push_back(*nodeid);
+        new_heartbeats.push_back(*heartbeat);
+
+        next_entry:
         continue;
     }
+
+    // Add all new nodes
+    for(int i=0; i<new_nodes.size(); i++)
+    {
+        if(addMember(new_nodes[i], new_heartbeats[i])){
+            printf(" N:%d " , new_nodes[i]);
+        }
+    }
+    printf("]\n");
+}
+
+bool MP1Node::addMember(char nodeid, long heartbeat)
+{
+    // Dont add yourself
+    if(nodeid != memberNode->addr.addr[0])
+    {
+        // Add new node
+        //printf("{%d} Adding new node [%d] to Members list during update\n", memberNode->addr.addr[0], *nodeid);
+        memberNode->nnb++;
+        MemberListEntry new_member = MemberListEntry(nodeid, 0, heartbeat, memberNode->heartbeat);
+        memberNode->memberList.push_back(new_member);
+
+        // Log this for grading system
+        Address newMemberAddr = Address();
+        newMemberAddr.init();
+        newMemberAddr.addr[0] = nodeid;
+        log->logNodeAdd(&memberNode->addr, &newMemberAddr);
+
+        return true;
+    }
+    return false;
 }
 
 
@@ -435,14 +464,16 @@ std::vector<std::tuple<int, long>> MP1Node::getActiveMembers()
     long now = this->memberNode->heartbeat;
     long elapsed_time;
 
+    printf("{%d:%ld} Active node [", memberNode->addr.addr[0], memberNode->heartbeat);
     for(std::vector<MemberListEntry>::iterator it = std::begin(this->memberNode->memberList); it != std::end(this->memberNode->memberList);it++) {
         elapsed_time = now - it->gettimestamp();
 
        if(elapsed_time < TFAIL){
-            printf("Active node %d\n", it->getid());
+            printf("%d, ", it->getid());
             active_nodes.push_back(std::make_tuple(it->getid(), it->getheartbeat()));
         }
     }
+    printf("]\n");
     return active_nodes;
 }
 
