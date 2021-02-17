@@ -334,12 +334,12 @@ void MP1Node::nodeLoopOps() {
 
             randomNeighbour = std::rand() % memberNode->nnb;
             neighbourAddr = memberNode->memberList[randomNeighbour].id;
-            printf("{%d} Sending Membership list to node [%d]", memberNode->addr.addr[0], neighbourAddr);
+            printf("{%d} Sending Membership list to node [%d]\n", memberNode->addr.addr[0], neighbourAddr);
             _sendJOINREP(neighbourAddr);
 
             randomNeighbour = std::rand() % memberNode->nnb;
             neighbourAddr = memberNode->memberList[randomNeighbour].id;
-            printf("{%d} Sending Membership list to node [%d]", memberNode->addr.addr[0], neighbourAddr);
+            printf("{%d} Sending Membership list to node [%d]\n", memberNode->addr.addr[0], neighbourAddr);
             _sendJOINREP(neighbourAddr);
         }
     }
@@ -357,6 +357,8 @@ void MP1Node::updateMember(int nodeid, long heartbeat)
             if(heartbeat > it->getheartbeat()){
                 it->setheartbeat(heartbeat);
                 it->settimestamp(now);
+                // TODO: test if this works ...
+                printf("{%d} Mark active node [%d]\n", memberNode->addr.addr[0], nodeid);
             } else {
                 printf("Strange! Received an outdated update!\n");
             }
@@ -391,17 +393,20 @@ void MP1Node::updateActiveMembers(int nEntries, char *buffer){
             }
         }
         {
-            // Add new node
-            printf("{%d} Adding new node [%d] to Members list during update\n", memberNode->addr.addr[0], *nodeid);
-            memberNode->nnb++;
-            MemberListEntry new_member = MemberListEntry(*nodeid, 0, *heartbeat, now);
-            memberNode->memberList.push_back(new_member);
+            if(*nodeid != memberNode->addr.addr[0])
+            {
+                // Add new node
+                printf("{%d} Adding new node [%d] to Members list during update\n", memberNode->addr.addr[0], *nodeid);
+                memberNode->nnb++;
+                MemberListEntry new_member = MemberListEntry(*nodeid, 0, *heartbeat, now);
+                memberNode->memberList.push_back(new_member);
 
-            // Log this for grading system
-            Address newMemberAddr = Address();
-            newMemberAddr.init();
-            newMemberAddr.addr[0] = *nodeid;
-            log->logNodeAdd(&memberNode->addr, &newMemberAddr);
+                // Log this for grading system
+                Address newMemberAddr = Address();
+                newMemberAddr.init();
+                newMemberAddr.addr[0] = *nodeid;
+                log->logNodeAdd(&memberNode->addr, &newMemberAddr);
+            }
         }
 
         nextEntry: // Jump to this if node was already present in MemberList
