@@ -259,6 +259,7 @@ bool MP1Node::recvCallBack(void *env, char *data, int size ) {
             break;
         }
     }
+    return true;
 }
 
 void MP1Node::_sendJOINREP(char recvNode){
@@ -363,7 +364,7 @@ void MP1Node::updateMember(int nodeid, long heartbeat)
                 // TODO: test if this works ...
                 printf("{%d:%ld} Mark active node [%d]\n", memberNode->addr.addr[0], memberNode->heartbeat, nodeid);
             } else {
-                printf("{%d:%ld} Strange! Received old heartbeat %d<%d from node %d!\n", memberNode->addr.addr[0], memberNode->heartbeat, heartbeat, it->getheartbeat(), nodeid);
+                printf("{%d:%ld} Strange! Received old heartbeat %ld<%ld from node %d!\n", memberNode->addr.addr[0], memberNode->heartbeat, heartbeat, it->getheartbeat(), nodeid);
             }
             return;
         }

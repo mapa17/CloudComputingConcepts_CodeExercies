@@ -21,7 +21,7 @@
  */
 #define TREMOVE 20
 #define TFAIL 5
-#define PINGPERIOD 3
+#define PINGPERIOD 2
 
 /*
  * Note: You can change/add any functions in MP1Node.{h,cpp}
